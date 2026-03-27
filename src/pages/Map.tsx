@@ -11,16 +11,6 @@ L.Icon.Default.mergeOptions({
   shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
 });
 
-// Ícono morado para la nueva ronda
-const purpleIcon = new L.Icon({
-  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-violet.png',
-  shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
-  iconSize: [25, 41],
-  iconAnchor: [12, 41],
-  popupAnchor: [1, -34],
-  shadowSize: [41, 41],
-});
-
 interface Round {
   id: string;
   place_name: string;
@@ -44,7 +34,10 @@ function MapClickHandler({
 }) {
   useMapEvents({
     click(e) {
-      if (picking) onSelect([e.latlng.lat, e.latlng.lng]);
+      if (picking) {
+        console.log('📍 Click en mapa:', e.latlng.lat, e.latlng.lng);
+        onSelect([e.latlng.lat, e.latlng.lng]);
+      }
     },
   });
   return null;
@@ -113,6 +106,7 @@ export default function Map() {
   }
 
   function handleMapSelect(pos: [number, number]) {
+    console.log('✅ Posición seleccionada:', pos);
     setSelectedPos(pos);
     setPicking(false);
     setShowForm(true);
@@ -126,6 +120,8 @@ export default function Map() {
     if (!user) return;
 
     const pos = selectedPos || userPos;
+    console.log('🚀 Creando ronda en:', pos);
+
     const { error } = await supabase.from('rounds').insert({
       creator_id: user.id,
       place_name: placeName,
@@ -146,7 +142,7 @@ export default function Map() {
       setSelectedPos(null);
       fetchRounds();
     } else {
-      alert('Error al crear la ronda: ' + error.message);
+      alert('Error: ' + error.message);
     }
     setCreating(false);
   }
@@ -154,24 +150,21 @@ export default function Map() {
   async function joinRound(roundId: string, type: 'open' | 'approval') {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
-
     const status = type === 'open' ? 'confirmed' : 'pending';
     const { error } = await supabase.from('round_members').insert({
       round_id: roundId,
       user_id: user.id,
       status,
     });
-
     if (!error) {
       fetchRounds();
-      alert(type === 'open' ? '¡Te sumaste a la ronda!' : 'Solicitud enviada. El creador debe aceptarte.');
+      alert(type === 'open' ? '¡Te sumaste a la ronda!' : 'Solicitud enviada.');
     }
   }
 
   return (
     <div style={styles.container}>
 
-      {/* Header */}
       <div style={styles.header}>
         <span style={styles.headerLogo}>🧉</span>
         <span style={styles.headerTitle}>MateMatch</span>
@@ -182,22 +175,23 @@ export default function Map() {
         )}
       </div>
 
-      {/* Banner modo selección */}
       {picking && (
         <div style={styles.pickingBanner}>
-          <span>📍 Tocá el mapa para marcar dónde será tu ronda</span>
+          <span>📍 Tocá el mapa para elegir la ubicación</span>
           <button style={styles.cancelPick} onClick={() => setPicking(false)}>
             Cancelar
           </button>
         </div>
       )}
 
-      {/* Mapa */}
-      <MapContainer
-        center={userPos}
-        zoom={15}
-        style={{ flex: 1, width: '100%' }}
-      >
+      {/* Coordenadas debug — visible mientras desarrollamos */}
+      {selectedPos && !showForm && (
+        <div style={styles.debugBar}>
+          lat: {selectedPos[0].toFixed(5)} · lng: {selectedPos[1].toFixed(5)}
+        </div>
+      )}
+
+      <MapContainer center={userPos} zoom={15} style={{ flex: 1, width: '100%' }}>
         <TileLayer
           attribution="&copy; OpenStreetMap"
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
@@ -205,18 +199,20 @@ export default function Map() {
 
         <MapClickHandler picking={picking} onSelect={handleMapSelect} />
 
-        {/* Tu ubicación */}
+        {/* Tu posición — círculo azul */}
         <Circle
           center={userPos}
           radius={60}
-          pathOptions={{ color: '#4f46e5', fillColor: '#4f46e5', fillOpacity: 0.3 }}
+          pathOptions={{ color: '#4f46e5', fillColor: '#4f46e5', fillOpacity: 0.4 }}
         />
 
-        {/* Pin de nueva ronda (morado) */}
+        {/* Ubicación seleccionada — círculo morado más grande */}
         {selectedPos && (
-          <Marker position={selectedPos} icon={purpleIcon}>
-            <Popup>📍 Nueva ronda aquí</Popup>
-          </Marker>
+          <Circle
+            center={selectedPos}
+            radius={40}
+            pathOptions={{ color: '#9333ea', fillColor: '#9333ea', fillOpacity: 0.7 }}
+          />
         )}
 
         {/* Rondas activas */}
@@ -252,7 +248,6 @@ export default function Map() {
         ))}
       </MapContainer>
 
-      {/* Barra inferior */}
       <div style={styles.roundsBar}>
         {loading
           ? 'Buscando rondas...'
@@ -261,13 +256,12 @@ export default function Map() {
             : `${rounds.length} ronda${rounds.length > 1 ? 's' : ''} activa${rounds.length > 1 ? 's' : ''} cerca`}
       </div>
 
-      {/* Modal crear ronda */}
       {showForm && (
         <div style={styles.overlay}>
           <div style={styles.modal}>
             <h2 style={styles.modalTitle}>🧉 Nueva ronda</h2>
             <p style={{ fontSize: 12, color: '#6ec99a', margin: 0 }}>
-              📍 Ubicación marcada en el mapa
+              📍 Ubicación marcada · lat {selectedPos?.[0].toFixed(4)} lng {selectedPos?.[1].toFixed(4)}
             </p>
             <button
               style={styles.changeLocBtn}
@@ -343,7 +337,10 @@ export default function Map() {
             >
               {creating ? 'Creando...' : 'Crear ronda'}
             </button>
-            <button style={styles.buttonSecondary} onClick={() => { setShowForm(false); setSelectedPos(null); }}>
+            <button
+              style={styles.buttonSecondary}
+              onClick={() => { setShowForm(false); setSelectedPos(null); }}
+            >
               Cancelar
             </button>
           </div>
@@ -401,6 +398,14 @@ const styles: Record<string, React.CSSProperties> = {
     padding: '4px 10px',
     fontSize: 12,
     cursor: 'pointer',
+  },
+  debugBar: {
+    background: '#0f0f1a',
+    color: '#4f46e5',
+    fontSize: 11,
+    textAlign: 'center',
+    padding: '4px',
+    fontFamily: 'monospace',
   },
   roundsBar: {
     background: '#1a1a2e',
