@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, Circle, useMapEvents } from 'react-leaflet';
 import L from 'leaflet';
 import { supabase } from '../supabase';
@@ -17,7 +17,6 @@ interface Round {
   description: string;
   type: 'open' | 'approval';
   capacity: number;
-  starts_at: string;
   creator_name: string;
   creator_rating: number;
   current_members: number;
@@ -34,27 +33,31 @@ function MapClickHandler({
 }) {
   useMapEvents({
     click(e) {
-      if (picking) {
-        console.log('📍 Click en mapa:', e.latlng.lat, e.latlng.lng);
-        onSelect([e.latlng.lat, e.latlng.lng]);
-      }
+      if (picking) onSelect([e.latlng.lat, e.latlng.lng]);
     },
   });
   return null;
 }
 
 export default function Map() {
-  const [rounds, setRounds] = useState<Round[]>([]);
-  const [userPos, setUserPos] = useState<[number, number]>([-31.4201, -64.1888]);
-  const [loading, setLoading] = useState(true);
-  const [showForm, setShowForm] = useState(false);
-  const [picking, setPicking] = useState(false);
-  const [creating, setCreating] = useState(false);
+  const [rounds, setRounds]       = useState<Round[]>([]);
+  const [userPos, setUserPos]     = useState<[number, number]>([-31.4201, -64.1888]);
+  const [loading, setLoading]     = useState(true);
+  const [showForm, setShowForm]   = useState(false);
+  const [picking, setPicking]     = useState(false);
+  const [creating, setCreating]   = useState(false);
   const [placeName, setPlaceName] = useState('');
   const [description, setDescription] = useState('');
-  const [capacity, setCapacity] = useState(4);
+  const [capacity, setCapacity]   = useState(4);
   const [roundType, setRoundType] = useState<'open' | 'approval'>('open');
   const [selectedPos, setSelectedPos] = useState<[number, number] | null>(null);
+
+  // Ref para mantener selectedPos disponible dentro de createRound sin closures viejos
+  const selectedPosRef = useRef<[number, number] | null>(null);
+
+  useEffect(() => {
+    selectedPosRef.current = selectedPos;
+  }, [selectedPos]);
 
   useEffect(() => {
     navigator.geolocation.getCurrentPosition(
@@ -69,7 +72,7 @@ export default function Map() {
     const { data, error } = await supabase
       .from('rounds')
       .select(`
-        id, place_name, description, type, capacity, starts_at,
+        id, place_name, description, type, capacity,
         location, status,
         users!creator_id (display_name, rating_avg),
         round_members (status)
@@ -77,24 +80,32 @@ export default function Map() {
       .eq('status', 'active');
 
     if (!error && data) {
-      const mapped = data.map((r: any) => {
-        const coords = r.location
-          ? JSON.parse(JSON.stringify(r.location))
-          : { coordinates: [-64.1888, -31.4201] };
-        return {
+      const mapped: Round[] = [];
+      for (const r of data) {
+        // Parsear coordenadas desde PostGIS
+        let lat = -31.4201;
+        let lng = -64.1888;
+        if (r.location) {
+          const loc = r.location as any;
+          // Supabase devuelve geography como {type, coordinates}
+          if (loc.coordinates) {
+            lng = loc.coordinates[0];
+            lat = loc.coordinates[1];
+          }
+        }
+        mapped.push({
           id: r.id,
           place_name: r.place_name,
           description: r.description || '',
           type: r.type,
           capacity: r.capacity,
-          starts_at: r.starts_at,
-          creator_name: r.users?.display_name || 'Anónimo',
-          creator_rating: r.users?.rating_avg || 0,
-          current_members: r.round_members?.filter((m: any) => m.status === 'confirmed').length || 0,
-          lat: coords.coordinates?.[1] || -31.4201,
-          lng: coords.coordinates?.[0] || -64.1888,
-        };
-      });
+          creator_name: (r.users as any)?.display_name || 'Anónimo',
+          creator_rating: (r.users as any)?.rating_avg || 0,
+          current_members: (r.round_members as any[])?.filter((m) => m.status === 'confirmed').length || 0,
+          lat,
+          lng,
+        });
+      }
       setRounds(mapped);
     }
     setLoading(false);
@@ -102,25 +113,30 @@ export default function Map() {
 
   function handleNuevaRonda() {
     setSelectedPos(null);
+    selectedPosRef.current = null;
     setPicking(true);
   }
 
   function handleMapSelect(pos: [number, number]) {
-    console.log('✅ Posición seleccionada:', pos);
     setSelectedPos(pos);
+    selectedPosRef.current = pos;
     setPicking(false);
     setShowForm(true);
   }
 
   async function createRound() {
-    if (!placeName.trim()) return;
+    const pos = selectedPosRef.current;
+    if (!placeName.trim() || !pos) {
+      alert('Seleccioná una ubicación en el mapa primero.');
+      return;
+    }
     setCreating(true);
 
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
-    const pos = selectedPos || userPos;
-    console.log('🚀 Creando ronda en:', pos);
+    // Formato WKT correcto para PostGIS: POINT(lng lat)
+    const wkt = `POINT(${pos[1]} ${pos[0]})`;
 
     const { error } = await supabase.from('rounds').insert({
       creator_id: user.id,
@@ -128,7 +144,7 @@ export default function Map() {
       description,
       capacity,
       type: roundType,
-      location: `POINT(${pos[1]} ${pos[0]})`,
+      location: wkt,
       place_type: 'public',
       is_public_place: true,
       starts_at: new Date().toISOString(),
@@ -139,10 +155,12 @@ export default function Map() {
       setPlaceName('');
       setDescription('');
       setCapacity(4);
+      setRoundType('open');
       setSelectedPos(null);
-      fetchRounds();
+      selectedPosRef.current = null;
+      await fetchRounds();
     } else {
-      alert('Error: ' + error.message);
+      alert('Error al crear la ronda: ' + error.message);
     }
     setCreating(false);
   }
@@ -157,8 +175,8 @@ export default function Map() {
       status,
     });
     if (!error) {
-      fetchRounds();
-      alert(type === 'open' ? '¡Te sumaste a la ronda!' : 'Solicitud enviada.');
+      await fetchRounds();
+      alert(type === 'open' ? '¡Te sumaste a la ronda!' : 'Solicitud enviada. El creador debe aceptarte.');
     }
   }
 
@@ -184,13 +202,6 @@ export default function Map() {
         </div>
       )}
 
-      {/* Coordenadas debug — visible mientras desarrollamos */}
-      {selectedPos && !showForm && (
-        <div style={styles.debugBar}>
-          lat: {selectedPos[0].toFixed(5)} · lng: {selectedPos[1].toFixed(5)}
-        </div>
-      )}
-
       <MapContainer center={userPos} zoom={15} style={{ flex: 1, width: '100%' }}>
         <TileLayer
           attribution="&copy; OpenStreetMap"
@@ -199,21 +210,21 @@ export default function Map() {
 
         <MapClickHandler picking={picking} onSelect={handleMapSelect} />
 
-        {/* Tu posición — círculo azul */}
+        {/* Tu ubicación */}
         <Circle
           center={userPos}
           radius={60}
-          pathOptions={{ color: '#4f46e5', fillColor: '#4f46e5', fillOpacity: 0.4 }}
+          pathOptions={{ color: '#4f46e5', fillColor: '#4f46e5', fillOpacity: 0.35 }}
         />
 
-        {/* Ubicación seleccionada — círculo morado más grande */}
+        {/* Ubicación seleccionada para nueva ronda */}
         {selectedPos && (
-  <Circle
-    center={selectedPos}
-    radius={120}
-    pathOptions={{ color: '#9333ea', fillColor: '#9333ea', fillOpacity: 0.8, weight: 4 }}
-  />
-)}
+          <Circle
+            center={selectedPos}
+            radius={120}
+            pathOptions={{ color: '#9333ea', fillColor: '#9333ea', fillOpacity: 0.75, weight: 4 }}
+          />
+        )}
 
         {/* Rondas activas */}
         {rounds.map((round) => (
@@ -261,7 +272,7 @@ export default function Map() {
           <div style={styles.modal}>
             <h2 style={styles.modalTitle}>🧉 Nueva ronda</h2>
             <p style={{ fontSize: 12, color: '#6ec99a', margin: 0 }}>
-              📍 Ubicación marcada · lat {selectedPos?.[0].toFixed(4)} lng {selectedPos?.[1].toFixed(4)}
+              📍 lat {selectedPos?.[0].toFixed(5)} · lng {selectedPos?.[1].toFixed(5)}
             </p>
             <button
               style={styles.changeLocBtn}
@@ -270,7 +281,7 @@ export default function Map() {
               Cambiar ubicación
             </button>
 
-            <label style={styles.label}>Lugar</label>
+            <label style={styles.label}>Nombre del lugar</label>
             <input
               style={styles.input}
               placeholder="ej: Parque Sarmiento, entrada norte"
@@ -339,7 +350,7 @@ export default function Map() {
             </button>
             <button
               style={styles.buttonSecondary}
-              onClick={() => { setShowForm(false); setSelectedPos(null); }}
+              onClick={() => { setShowForm(false); setSelectedPos(null); selectedPosRef.current = null; }}
             >
               Cancelar
             </button>
@@ -351,70 +362,14 @@ export default function Map() {
 }
 
 const styles: Record<string, React.CSSProperties> = {
-  container: {
-    height: '100vh',
-    display: 'flex',
-    flexDirection: 'column',
-    background: '#0f0f1a',
-    fontFamily: 'system-ui, sans-serif',
-  },
-  header: {
-    background: '#1a1a2e',
-    padding: '12px 16px',
-    display: 'flex',
-    alignItems: 'center',
-    gap: 10,
-    borderBottom: '1px solid #2e2e4e',
-    zIndex: 1000,
-  },
+  container: { height: '100vh', display: 'flex', flexDirection: 'column', background: '#0f0f1a', fontFamily: 'system-ui, sans-serif' },
+  header: { background: '#1a1a2e', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 10, borderBottom: '1px solid #2e2e4e', zIndex: 1000 },
   headerLogo: { fontSize: 22 },
   headerTitle: { color: '#fff', fontWeight: 700, fontSize: 18, flex: 1 },
-  newRoundBtn: {
-    background: '#4f46e5',
-    color: '#fff',
-    border: 'none',
-    borderRadius: 8,
-    padding: '8px 14px',
-    fontSize: 13,
-    fontWeight: 600,
-    cursor: 'pointer',
-  },
-  pickingBanner: {
-    background: '#4f46e5',
-    color: '#fff',
-    fontSize: 13,
-    fontWeight: 500,
-    padding: '10px 16px',
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    zIndex: 1000,
-  },
-  cancelPick: {
-    background: 'rgba(255,255,255,0.2)',
-    color: '#fff',
-    border: 'none',
-    borderRadius: 6,
-    padding: '4px 10px',
-    fontSize: 12,
-    cursor: 'pointer',
-  },
-  debugBar: {
-    background: '#0f0f1a',
-    color: '#4f46e5',
-    fontSize: 11,
-    textAlign: 'center',
-    padding: '4px',
-    fontFamily: 'monospace',
-  },
-  roundsBar: {
-    background: '#1a1a2e',
-    color: '#9b9bb4',
-    fontSize: 12,
-    textAlign: 'center',
-    padding: '8px 16px',
-    borderTop: '1px solid #2e2e4e',
-  },
+  newRoundBtn: { background: '#4f46e5', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 14px', fontSize: 13, fontWeight: 600, cursor: 'pointer' },
+  pickingBanner: { background: '#4f46e5', color: '#fff', fontSize: 13, fontWeight: 500, padding: '10px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', zIndex: 1000 },
+  cancelPick: { background: 'rgba(255,255,255,0.2)', color: '#fff', border: 'none', borderRadius: 6, padding: '4px 10px', fontSize: 12, cursor: 'pointer' },
+  roundsBar: { background: '#1a1a2e', color: '#9b9bb4', fontSize: 12, textAlign: 'center', padding: '8px 16px', borderTop: '1px solid #2e2e4e' },
   popup: { fontFamily: 'system-ui, sans-serif', minWidth: 180 },
   popupHeader: { display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 },
   popupEmoji: { fontSize: 18 },
@@ -422,59 +377,17 @@ const styles: Record<string, React.CSSProperties> = {
   popupDesc: { fontSize: 12, color: '#666', margin: '0 0 6px' },
   popupMeta: { display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#444', marginBottom: 4 },
   typeBadge: { fontSize: 10, fontWeight: 600, padding: '2px 7px', borderRadius: 10 },
-  joinBtn: {
-    width: '100%', padding: '8px', background: '#4f46e5', color: '#fff',
-    border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer', marginTop: 8,
-  },
-  overlay: {
-    position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-    background: 'rgba(0,0,0,0.7)',
-    display: 'flex', alignItems: 'flex-end', justifyContent: 'center',
-    zIndex: 2000,
-  },
-  modal: {
-    background: '#1a1a2e',
-    borderRadius: '20px 20px 0 0',
-    padding: '28px 24px 40px',
-    width: '100%',
-    maxWidth: 480,
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 10,
-    maxHeight: '85vh',
-    overflowY: 'auto',
-  },
+  joinBtn: { width: '100%', padding: '8px', background: '#4f46e5', color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer', marginTop: 8 },
+  overlay: { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', zIndex: 2000 },
+  modal: { background: '#1a1a2e', borderRadius: '20px 20px 0 0', padding: '28px 24px 40px', width: '100%', maxWidth: 480, display: 'flex', flexDirection: 'column', gap: 10, maxHeight: '85vh', overflowY: 'auto' },
   modalTitle: { color: '#fff', fontSize: 20, fontWeight: 700, margin: 0 },
-  changeLocBtn: {
-    background: 'transparent',
-    color: '#9b9bb4',
-    border: '1px solid #2e2e4e',
-    borderRadius: 8,
-    padding: '6px 12px',
-    fontSize: 12,
-    cursor: 'pointer',
-    alignSelf: 'flex-start',
-  },
+  changeLocBtn: { background: 'transparent', color: '#9b9bb4', border: '1px solid #2e2e4e', borderRadius: 8, padding: '6px 12px', fontSize: 12, cursor: 'pointer', alignSelf: 'flex-start' },
   label: { color: '#9b9bb4', fontSize: 12 },
-  input: {
-    background: '#0f0f1a',
-    border: '1px solid #2e2e4e',
-    borderRadius: 10,
-    color: '#fff',
-    fontSize: 14,
-    padding: '11px 14px',
-    outline: 'none',
-  },
+  input: { background: '#0f0f1a', border: '1px solid #2e2e4e', borderRadius: 10, color: '#fff', fontSize: 14, padding: '11px 14px', outline: 'none' },
   cuposRow: { display: 'flex', gap: 8 },
   cupoBtn: { flex: 1, padding: '8px', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer' },
   typeRow: { display: 'flex', gap: 8 },
   typeBtn: { flex: 1, padding: '10px', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer' },
-  button: {
-    padding: '14px', background: '#4f46e5', color: '#fff',
-    border: 'none', borderRadius: 10, fontSize: 15, fontWeight: 600, cursor: 'pointer', marginTop: 4,
-  },
-  buttonSecondary: {
-    padding: '12px', background: 'transparent', color: '#9b9bb4',
-    border: '1px solid #2e2e4e', borderRadius: 10, fontSize: 14, cursor: 'pointer',
-  },
+  button: { padding: '14px', background: '#4f46e5', color: '#fff', border: 'none', borderRadius: 10, fontSize: 15, fontWeight: 600, cursor: 'pointer', marginTop: 4 },
+  buttonSecondary: { padding: '12px', background: 'transparent', color: '#9b9bb4', border: '1px solid #2e2e4e', borderRadius: 10, fontSize: 14, cursor: 'pointer' },
 };
