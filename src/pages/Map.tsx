@@ -4,7 +4,6 @@ import L from 'leaflet';
 import { supabase } from '../supabase';
 import 'leaflet/dist/leaflet.css';
 
-// Fix de iconos de Leaflet en Vite
 delete (L.Icon.Default.prototype as any)._getIconUrl;
 L.Icon.Default.mergeOptions({
   iconRetinaUrl:
@@ -27,6 +26,35 @@ interface Round {
   lng: number;
 }
 
+// ✅ Fuera de Map para que React no lo destruya en cada render
+function LocationPicker({
+  showForm,
+  selectedPos,
+  onSelect,
+}: {
+  showForm: boolean;
+  selectedPos: [number, number] | null;
+  onSelect: (pos: [number, number]) => void;
+}) {
+  useMapEvents({
+    click(e) {
+      if (showForm) {
+        onSelect([e.latlng.lat, e.latlng.lng]);
+      }
+    },
+  });
+  return selectedPos ? (
+    <Marker
+      position={selectedPos}
+      icon={L.divIcon({
+        className: '',
+        html: '<div style="background:#4f46e5;width:16px;height:16px;border-radius:50%;border:3px solid white;box-shadow:0 2px 8px rgba(0,0,0,0.4)"></div>',
+        iconAnchor: [8, 8],
+      })}
+    />
+  ) : null;
+}
+
 export default function Map() {
   const [rounds, setRounds] = useState<Round[]>([]);
   const [userPos, setUserPos] = useState<[number, number]>([
@@ -39,7 +67,6 @@ export default function Map() {
   const [description, setDescription] = useState('');
   const [capacity, setCapacity] = useState(4);
   const [roundType, setRoundType] = useState<'open' | 'approval'>('open');
-  // Cambio 2 — nuevo estado para la posición seleccionada
   const [selectedPos, setSelectedPos] = useState<[number, number] | null>(null);
 
   useEffect(() => {
@@ -105,7 +132,6 @@ export default function Map() {
       description,
       capacity,
       type: roundType,
-      // Cambio 5 — usa selectedPos si existe, si no userPos
       location: `POINT(${(selectedPos || userPos)[1]} ${(selectedPos || userPos)[0]})`,
       place_type: 'public',
       is_public_place: true,
@@ -146,27 +172,6 @@ export default function Map() {
     }
   }
 
-  // Cambio 3 — componente para seleccionar ubicación tocando el mapa
-  function LocationPicker() {
-    useMapEvents({
-      click(e) {
-        if (showForm) {
-          setSelectedPos([e.latlng.lat, e.latlng.lng]);
-        }
-      },
-    });
-    return selectedPos ? (
-      <Marker
-        position={selectedPos}
-        icon={L.divIcon({
-          className: '',
-          html: '<div style="background:#4f46e5;width:16px;height:16px;border-radius:50%;border:3px solid white;box-shadow:0 2px 8px rgba(0,0,0,0.4)"></div>',
-          iconAnchor: [8, 8],
-        })}
-      />
-    ) : null;
-  }
-
   return (
     <div style={styles.container}>
       {/* Header */}
@@ -189,8 +194,12 @@ export default function Map() {
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
 
-        {/* Cambio 4 — LocationPicker dentro del MapContainer */}
-        <LocationPicker />
+        {/* ✅ Props pasadas explícitamente */}
+        <LocationPicker
+          showForm={showForm}
+          selectedPos={selectedPos}
+          onSelect={setSelectedPos}
+        />
 
         {/* Posición del usuario */}
         <Circle
@@ -263,7 +272,6 @@ export default function Map() {
             <h2 style={styles.modalTitle}>🧉 Nueva ronda</h2>
             <p style={styles.modalSubtitle}>Solo en espacios públicos</p>
 
-            {/* Cambio 6 — indicador de ubicación seleccionada */}
             <p style={{ fontSize: 12, color: selectedPos ? '#6ec99a' : '#ef9f27', margin: 0 }}>
               {selectedPos ? '📍 Ubicación seleccionada en el mapa' : '👆 Tocá el mapa para elegir la ubicación exacta'}
             </p>
