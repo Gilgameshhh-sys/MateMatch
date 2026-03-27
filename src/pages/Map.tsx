@@ -208,12 +208,12 @@ export default function Map() {
 
         {/* Ubicación seleccionada — círculo morado más grande */}
         {selectedPos && (
-          <Circle
-            center={selectedPos}
-            radius={40}
-            pathOptions={{ color: '#9333ea', fillColor: '#9333ea', fillOpacity: 0.7 }}
-          />
-        )}
+  <Circle
+    center={selectedPos}
+    radius={120}
+    pathOptions={{ color: '#9333ea', fillColor: '#9333ea', fillOpacity: 0.8, weight: 4 }}
+  />
+)}
 
         {/* Rondas activas */}
         {rounds.map((round) => (
