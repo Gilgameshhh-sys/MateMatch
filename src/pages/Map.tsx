@@ -11,6 +11,16 @@ L.Icon.Default.mergeOptions({
   shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
 });
 
+// Ícono morado para la nueva ronda
+const purpleIcon = new L.Icon({
+  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-violet.png',
+  shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+  iconSize: [25, 41],
+  iconAnchor: [12, 41],
+  popupAnchor: [1, -34],
+  shadowSize: [41, 41],
+});
+
 interface Round {
   id: string;
   place_name: string;
@@ -25,13 +35,11 @@ interface Round {
   lng: number;
 }
 
-function LocationPicker({
+function MapClickHandler({
   picking,
-  selectedPos,
   onSelect,
 }: {
   picking: boolean;
-  selectedPos: [number, number] | null;
   onSelect: (pos: [number, number]) => void;
 }) {
   useMapEvents({
@@ -39,16 +47,7 @@ function LocationPicker({
       if (picking) onSelect([e.latlng.lat, e.latlng.lng]);
     },
   });
-  return selectedPos ? (
-    <Marker
-      position={selectedPos}
-      icon={L.divIcon({
-        className: '',
-        html: '<div style="background:#4f46e5;width:18px;height:18px;border-radius:50%;border:3px solid white;box-shadow:0 2px 8px rgba(0,0,0,0.5)"></div>',
-        iconAnchor: [9, 9],
-      })}
-    />
-  ) : null;
+  return null;
 }
 
 export default function Map() {
@@ -56,7 +55,7 @@ export default function Map() {
   const [userPos, setUserPos] = useState<[number, number]>([-31.4201, -64.1888]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
-  const [picking, setPicking] = useState(false); // modo "elegir ubicación"
+  const [picking, setPicking] = useState(false);
   const [creating, setCreating] = useState(false);
   const [placeName, setPlaceName] = useState('');
   const [description, setDescription] = useState('');
@@ -110,13 +109,13 @@ export default function Map() {
 
   function handleNuevaRonda() {
     setSelectedPos(null);
-    setPicking(true); // activar modo selección
+    setPicking(true);
   }
 
   function handleMapSelect(pos: [number, number]) {
     setSelectedPos(pos);
     setPicking(false);
-    setShowForm(true); // abrir form recién después de elegir
+    setShowForm(true);
   }
 
   async function createRound() {
@@ -146,6 +145,8 @@ export default function Map() {
       setCapacity(4);
       setSelectedPos(null);
       fetchRounds();
+    } else {
+      alert('Error al crear la ronda: ' + error.message);
     }
     setCreating(false);
   }
@@ -184,7 +185,7 @@ export default function Map() {
       {/* Banner modo selección */}
       {picking && (
         <div style={styles.pickingBanner}>
-          <span>📍 Tocá el mapa para elegir la ubicación de tu ronda</span>
+          <span>📍 Tocá el mapa para marcar dónde será tu ronda</span>
           <button style={styles.cancelPick} onClick={() => setPicking(false)}>
             Cancelar
           </button>
@@ -194,26 +195,31 @@ export default function Map() {
       {/* Mapa */}
       <MapContainer
         center={userPos}
-        zoom={14}
-        style={{ flex: 1, width: '100%', cursor: picking ? 'crosshair' : 'grab' }}
+        zoom={15}
+        style={{ flex: 1, width: '100%' }}
       >
         <TileLayer
           attribution="&copy; OpenStreetMap"
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
 
-        <LocationPicker
-          picking={picking}
-          selectedPos={selectedPos}
-          onSelect={handleMapSelect}
-        />
+        <MapClickHandler picking={picking} onSelect={handleMapSelect} />
 
+        {/* Tu ubicación */}
         <Circle
           center={userPos}
-          radius={80}
+          radius={60}
           pathOptions={{ color: '#4f46e5', fillColor: '#4f46e5', fillOpacity: 0.3 }}
         />
 
+        {/* Pin de nueva ronda (morado) */}
+        {selectedPos && (
+          <Marker position={selectedPos} icon={purpleIcon}>
+            <Popup>📍 Nueva ronda aquí</Popup>
+          </Marker>
+        )}
+
+        {/* Rondas activas */}
         {rounds.map((round) => (
           <Marker key={round.id} position={[round.lat, round.lng]}>
             <Popup>
@@ -248,12 +254,14 @@ export default function Map() {
 
       {/* Barra inferior */}
       <div style={styles.roundsBar}>
-        {loading ? 'Buscando rondas...' : rounds.length === 0
-          ? 'No hay rondas activas cerca. ¡Creá la primera!'
-          : `${rounds.length} ronda${rounds.length > 1 ? 's' : ''} activa${rounds.length > 1 ? 's' : ''} cerca`}
+        {loading
+          ? 'Buscando rondas...'
+          : rounds.length === 0
+            ? 'No hay rondas activas cerca. ¡Creá la primera!'
+            : `${rounds.length} ronda${rounds.length > 1 ? 's' : ''} activa${rounds.length > 1 ? 's' : ''} cerca`}
       </div>
 
-      {/* Modal crear ronda — aparece DESPUÉS de elegir ubicación */}
+      {/* Modal crear ronda */}
       {showForm && (
         <div style={styles.overlay}>
           <div style={styles.modal}>
@@ -335,7 +343,7 @@ export default function Map() {
             >
               {creating ? 'Creando...' : 'Crear ronda'}
             </button>
-            <button style={styles.buttonSecondary} onClick={() => setShowForm(false)}>
+            <button style={styles.buttonSecondary} onClick={() => { setShowForm(false); setSelectedPos(null); }}>
               Cancelar
             </button>
           </div>
