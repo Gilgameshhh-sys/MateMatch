@@ -67,49 +67,28 @@ export default function Map() {
     fetchRounds();
   }, []);
 
-  async function fetchRounds() {
-    setLoading(true);
-    const { data, error } = await supabase
-      .from('rounds')
-      .select(`
-        id, place_name, description, type, capacity,
-        location, status,
-        users!creator_id (display_name, rating_avg),
-        round_members (status)
-      `)
-      .eq('status', 'active');
+ async function fetchRounds() {
+  setLoading(true);
+  const { data, error } = await supabase
+    .rpc('get_active_rounds');
 
-    if (!error && data) {
-      const mapped: Round[] = [];
-      for (const r of data) {
-        // Parsear coordenadas desde PostGIS
-        let lat = -31.4201;
-        let lng = -64.1888;
-        if (r.location) {
-          const loc = r.location as any;
-          // Supabase devuelve geography como {type, coordinates}
-          if (loc.coordinates) {
-            lng = loc.coordinates[0];
-            lat = loc.coordinates[1];
-          }
-        }
-        mapped.push({
-          id: r.id,
-          place_name: r.place_name,
-          description: r.description || '',
-          type: r.type,
-          capacity: r.capacity,
-          creator_name: (r.users as any)?.display_name || 'Anónimo',
-          creator_rating: (r.users as any)?.rating_avg || 0,
-          current_members: (r.round_members as any[])?.filter((m) => m.status === 'confirmed').length || 0,
-          lat,
-          lng,
-        });
-      }
-      setRounds(mapped);
-    }
-    setLoading(false);
+  if (!error && data) {
+    const mapped: Round[] = data.map((r: any) => ({
+      id: r.id,
+      place_name: r.place_name,
+      description: r.description || '',
+      type: r.type,
+      capacity: r.capacity,
+      creator_name: r.creator_name || 'Anónimo',
+      creator_rating: r.creator_rating || 0,
+      current_members: r.current_members || 0,
+      lat: r.lat,
+      lng: r.lng,
+    }));
+    setRounds(mapped);
   }
+  setLoading(false);
+}
 
   function handleNuevaRonda() {
     setSelectedPos(null);
