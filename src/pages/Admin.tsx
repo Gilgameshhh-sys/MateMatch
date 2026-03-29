@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../supabase'
 
-const ADMIN_ID = 'bb2e0cdb-d5d6-4e7a-98cc-521808650b08'
+
 
 interface PendingUser {
   id: string
