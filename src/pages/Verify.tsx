@@ -1,99 +1,46 @@
-import { useRef, useState, useEffect } from 'react'
+import { useRef, useState } from 'react'
 import { supabase } from '../supabase'
 
 export default function Verify({ onVerified }: { onVerified: () => void }) {
-  const videoRef   = useRef<HTMLVideoElement>(null)
-  const canvasRef  = useRef<HTMLCanvasElement>(null)
-  const streamRef  = useRef<MediaStream | null>(null)
-
-  const [step, setStep]       = useState<'intro' | 'camera' | 'preview' | 'uploading' | 'done'>('intro')
+  const inputRef = useRef<HTMLInputElement>(null)
+  const [step, setStep]       = useState<'intro' | 'preview' | 'uploading' | 'done'>('intro')
   const [imgData, setImgData] = useState<string | null>(null)
+  const [imgBlob, setImgBlob] = useState<Blob | null>(null)
   const [error, setError]     = useState('')
-  const [ready, setReady]     = useState(false) // video listo para capturar
 
-  // Limpiar stream al desmontar
-  useEffect(() => {
-    return () => { streamRef.current?.getTracks().forEach(t => t.stop()) }
-  }, [])
+  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
 
-  async function startCamera() {
-    setError('')
-    try {
-      const s = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: 'user',
-          width: { ideal: 640 },
-          height: { ideal: 480 },
-        },
-        audio: false,
-      })
-      streamRef.current = s
-
-      if (videoRef.current) {
-        videoRef.current.srcObject = s
-        // En iOS necesitamos esperar a que el video esté realmente listo
-        videoRef.current.onloadedmetadata = () => {
-          videoRef.current?.play().then(() => {
-            setReady(true)
-          }).catch(() => {
-            setReady(true) // intentar igual
-          })
-        }
-      }
-      setStep('camera')
-    } catch (e: any) {
-      if (e.name === 'NotAllowedError') {
-        setError('Permiso de cámara denegado. Andá a la configuración de tu celu y habilitá la cámara para este sitio.')
-      } else if (e.name === 'NotFoundError') {
-        setError('No encontramos una cámara en tu dispositivo.')
-      } else {
-        setError('No pudimos acceder a la cámara. Intentá desde Chrome o Safari.')
-      }
-    }
-  }
-
-  function takeSelfie() {
-    const video  = videoRef.current
-    const canvas = canvasRef.current
-    if (!video || !canvas) return
-
-    const w = video.videoWidth  || 640
-    const h = video.videoHeight || 480
-    canvas.width  = w
-    canvas.height = h
-
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
-
-    // Espejear horizontalmente (más natural para selfie)
-    ctx.translate(w, 0)
-    ctx.scale(-1, 1)
-    ctx.drawImage(video, 0, 0, w, h)
-
-    const data = canvas.toDataURL('image/jpeg', 0.85)
-
-    // Verificar que la imagen no esté vacía
-    if (data === 'data:,') {
-      setError('No pudimos capturar la foto. Intentá de nuevo.')
+    // Verificar que sea imagen
+    if (!file.type.startsWith('image/')) {
+      setError('Por favor seleccioná una foto.')
       return
     }
 
-    setImgData(data)
-    streamRef.current?.getTracks().forEach(t => t.stop())
-    streamRef.current = null
-    setReady(false)
-    setStep('preview')
+    setImgBlob(file)
+    const reader = new FileReader()
+    reader.onload = (ev) => {
+      const result = ev.target?.result as string
+      if (result) {
+        setImgData(result)
+        setStep('preview')
+      }
+    }
+    reader.readAsDataURL(file)
   }
 
   function retake() {
     setImgData(null)
+    setImgBlob(null)
     setError('')
-    setReady(false)
     setStep('intro')
+    // Resetear el input para que detecte la misma foto de nuevo si es necesario
+    if (inputRef.current) inputRef.current.value = ''
   }
 
   async function uploadSelfie() {
-    if (!imgData) return
+    if (!imgBlob) return
     setStep('uploading')
     setError('')
 
@@ -101,17 +48,11 @@ export default function Verify({ onVerified }: { onVerified: () => void }) {
     if (!user) return
 
     try {
-      // Convertir base64 a blob de forma segura
-      const byteStr = atob(imgData.split(',')[1])
-      const ab      = new ArrayBuffer(byteStr.length)
-      const ia      = new Uint8Array(ab)
-      for (let i = 0; i < byteStr.length; i++) ia[i] = byteStr.charCodeAt(i)
-      const blob = new Blob([ab], { type: 'image/jpeg' })
-
       const path = `${user.id}/selfie.jpg`
+
       const { error: uploadError } = await supabase.storage
         .from('selfies')
-        .upload(path, blob, { upsert: true, contentType: 'image/jpeg' })
+        .upload(path, imgBlob, { upsert: true, contentType: 'image/jpeg' })
 
       if (uploadError) {
         setError('Error al subir la foto: ' + uploadError.message)
@@ -139,13 +80,6 @@ export default function Verify({ onVerified }: { onVerified: () => void }) {
     }
   }
 
-  function stopAndGoBack() {
-    streamRef.current?.getTracks().forEach(t => t.stop())
-    streamRef.current = null
-    setReady(false)
-    setStep('intro')
-  }
-
   return (
     <div style={styles.container}>
       <div style={styles.card}>
@@ -155,7 +89,7 @@ export default function Verify({ onVerified }: { onVerified: () => void }) {
             <div style={styles.icon}>📸</div>
             <h2 style={styles.title}>Verificación de identidad</h2>
             <p style={styles.desc}>
-              MateMatch requiere una selfie para confirmar que sos una persona real.
+              Necesitamos una selfie para confirmar que sos una persona real.
               Es la base de confianza de toda la comunidad.
             </p>
             <div style={styles.infoBox}>
@@ -164,48 +98,19 @@ export default function Verify({ onVerified }: { onVerified: () => void }) {
               <p style={styles.infoText}>✅ Podés actualizarla cuando quieras</p>
             </div>
             {error && <p style={styles.error}>{error}</p>}
-            <button style={styles.button} onClick={startCamera}>
-              Activar cámara
-            </button>
-          </>
-        )}
 
-        {step === 'camera' && (
-          <>
-            <h2 style={styles.title}>Mirá a la cámara</h2>
-            <p style={styles.desc}>Asegurate de que tu cara esté bien iluminada.</p>
-
-            {/* Video con muted obligatorio para autoplay en iOS */}
-            <video
-              ref={videoRef}
-              autoPlay
-              playsInline
-              muted
-              style={{
-                ...styles.video,
-                transform: 'scaleX(-1)', // espejo
-                background: '#000',
-              }}
+            {/* Input oculto — abre la cámara frontal directamente */}
+            <input
+              ref={inputRef}
+              type="file"
+              accept="image/*"
+              capture="user"
+              style={{ display: 'none' }}
+              onChange={handleFileChange}
             />
-            <canvas ref={canvasRef} style={{ display: 'none' }} />
 
-            {!ready && (
-              <p style={{ color: '#9b9bb4', fontSize: 12, textAlign: 'center', margin: 0 }}>
-                Iniciando cámara...
-              </p>
-            )}
-
-            {error && <p style={styles.error}>{error}</p>}
-
-            <button
-              style={{ ...styles.button, opacity: ready ? 1 : 0.4 }}
-              onClick={takeSelfie}
-              disabled={!ready}
-            >
-              📸 Sacar foto
-            </button>
-            <button style={styles.buttonSecondary} onClick={stopAndGoBack}>
-              Cancelar
+            <button style={styles.button} onClick={() => inputRef.current?.click()}>
+              📸 Sacar selfie
             </button>
           </>
         )}
@@ -213,11 +118,11 @@ export default function Verify({ onVerified }: { onVerified: () => void }) {
         {step === 'preview' && imgData && (
           <>
             <h2 style={styles.title}>¿Se ve bien tu cara?</h2>
+            <p style={styles.desc}>Asegurate de que tu cara esté clara y bien iluminada.</p>
             <img
               src={imgData}
               style={styles.preview}
               alt="selfie preview"
-              onError={() => setError('La imagen no se pudo cargar. Repetí la foto.')}
             />
             {error && <p style={styles.error}>{error}</p>}
             <button style={styles.button} onClick={uploadSelfie}>
@@ -285,17 +190,10 @@ const styles: Record<string, React.CSSProperties> = {
     gap: 6,
   },
   infoText: { color: '#9b9bb4', fontSize: 12, margin: 0 },
-  video: {
-    width: '100%',
-    borderRadius: 12,
-    maxHeight: 300,
-    objectFit: 'cover',
-    display: 'block',
-  },
   preview: {
     width: '100%',
     borderRadius: 12,
-    maxHeight: 300,
+    maxHeight: 320,
     objectFit: 'cover',
     display: 'block',
   },
